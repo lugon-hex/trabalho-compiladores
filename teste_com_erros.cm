@@ -1,0 +1,27 @@
+/*
+Arquivo de teste COM ERROS LÉXICOS para a linguagem C-
+Este arquivo foi criado para verificar se o seu analisador léxico
+consegue identificar e reportar corretamente falhas de símbolos.
+*/
+
+int main(void) {
+int 123var;     /* Erro 1: Identificador inválido começando com número */
+int x;
+
+x = 10;
+
+/* Erro 2: Símbolo/caractere desconhecido ou inválido na linguagem C- */
+x = x @ 2; 
+
+/* Erro 3: Operador inválido ou incompleto (ex: & sozinho se não suportado) */
+if (x # 5) {
+    x = x $ 1;
+}
+
+/* Erro 4: Comentário de bloco não fechado (Lexer deve acusar EOF no comentário) */
+/* Este comentário nunca termina...
+
+return 0;
+
+
+}

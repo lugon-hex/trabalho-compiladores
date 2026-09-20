@@ -1,4 +1,3 @@
-/* Este é um programa de teste para o analisador léxico */
 int main(void) {
     int x;
     int y;
@@ -12,6 +11,5 @@ int main(void) {
         return 0;
     }
 
-    /* Testando o erro proposital com um caractere desconhecido */
     @ 
 }

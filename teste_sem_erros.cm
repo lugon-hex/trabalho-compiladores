@@ -1,0 +1,43 @@
+/* 
+  Arquivo de teste para Analisador Léxico da linguagem C-
+  Contém funções, estruturas de controle, operadores e tipos básicos.
+*/
+
+int globalvar;
+
+/* Função para calcular o fatorial de um número */
+int fatorial(int n) {
+    int resultado;
+    
+    if (n <= 1) {
+        resultado = 1;
+    } else {
+        resultado = n * fatorial(n - 1);
+    }
+    
+    return resultado;
+}
+
+/* Função principal */
+void main(void) {
+    int x;
+    int y;
+    int vetor[10];
+    
+    x = 5;
+    y = fatorial(x);
+    
+    /* Testando operadores relacionais e lógicos/condicionais */
+    if (y >= 120) {
+        vetor[0] = 1;
+    } else {
+        vetor[0] = 0;
+    }
+    
+    /* Testando laço de repetição */
+    while (x > 0) {
+        x = x - 1;
+    }
+    
+    output(y);
+}

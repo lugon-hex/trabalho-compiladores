@@ -2,6 +2,8 @@
     #include <stdio.h>
 %}
 
+%x COMMENT
+
 letter     [a-zA-Z]
 digit      [0-9]
 ID         {letter}{letter}*
@@ -10,7 +12,21 @@ NUM        {digit}{digit}*
 %%
 
     /* Comentários */
-"/*"([^*]|\*+[^*/])*\*+"/" {}
+"/*"                 { BEGIN(COMMENT); }
+
+<COMMENT>[^*]+       { /* Ignora o conteúdo interno */ }
+<COMMENT>"*"         { /* Ignora asteriscos isolados */ }
+<COMMENT>"*"+"/"     { BEGIN(INITIAL); /* Fecha o comentário */ }
+
+<COMMENT><<EOF>>     {
+    printf("LEXICAL ERROR: Unclosed block comment at EOF\n");
+    yyterminate();
+}
+
+    /* ERRO: Identificador começando com número (ex: 123var) */
+{digit}+{letter}{letter}* { 
+    printf("LEXICAL ERROR: Invalid identifier '%s'\n", yytext); 
+}
 
     /* Keywords */
 "else"|"if"|"int"|"return"|"void"|"while" { 
