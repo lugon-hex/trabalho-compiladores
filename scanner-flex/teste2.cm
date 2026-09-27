@@ -1,3 +1,4 @@
+/*Isto é um comentário muito sinistro. AHHH. Levei um susto de tão sinistro!*/
 int main(void) {
     int x;
     int y;
