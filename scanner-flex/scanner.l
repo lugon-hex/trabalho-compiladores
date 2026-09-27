@@ -24,9 +24,13 @@ whitespace  [ \t\r]+
 <COMMENT>"*"            { /* Ignora asteriscos isolados */ }
 <COMMENT>"*"+"/"        { BEGIN(INITIAL); /* Fecha o comentário */ }
 
-<COMMENT><<EOF>>        {
-                            return ERROR;
-                        }
+<COMMENT><<EOF>> {
+    /* Opcional: imprimir o erro antes de sair */
+    fprintf(stderr, "Erro léxico: Comentário não fechado no fim do arquivo\n");
+    
+    /* Retorna ENDFILE para que o loop do main() encerre */
+    return ENDFILE; 
+}
 
     /* ERRO: Identificador começando com número */
 {digit}+{letter}{identifier}* { 
