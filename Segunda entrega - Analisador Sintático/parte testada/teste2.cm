@@ -1,0 +1,6 @@
+int main(void) {
+    char y;
+    y = 'y';
+    if (y == 'n') return 'Incorrect';
+    else return 'Correct';
+}
