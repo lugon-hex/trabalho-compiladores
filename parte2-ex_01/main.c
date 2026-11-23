@@ -21,7 +21,7 @@ int ler_tokens(void) {
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        printf("Uso: %s <arquivo.cm>\n", argv[0]);
+        printf("Uso: %s <arquivo.txt>\n", argv[0]);
         return 1;
     }
 
