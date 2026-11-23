@@ -52,5 +52,29 @@ gcc main.c scan.c parser.c -o main
 Arquivos de teste na pasta:
 - `teste1.cm`
 - `teste2.cm`
-- `teste3.cm`
-- `teste4_erro.cm` (teste de erro sintático)
+- `teste3_erro.cm` (teste de erro sintático)
+
+
+
+
+## 4. Parser Yacc / Bison (C-Minus)
+
+Entre na pasta do parser:
+```bash
+cd "Segunda entrega - Analisador Sintático/parte testada"
+```
+
+Compile e execute passando o arquivo de teste:
+```bash
+bison -d yacc.y
+gcc MAIN.C SCAN.C ADAPTA.c yacc.tab.c -o analisador_sintatico
+./analisador_sintatico teste.cm
+```
+
+Arquivos de teste na pasta:
+- `teste.cm`
+- `teste2.cm`
+- `teste_com_erros.cm`
+
+---
+
