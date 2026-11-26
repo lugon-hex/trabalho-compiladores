@@ -1,0 +1,1263 @@
+==> adapta.c <==
+#include "scan.h"
+#include "yacc.tab.h"
+#include "erros.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static char* copiarLexema(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *copia = (char*) malloc(len);
+    if (copia != NULL) {
+        memcpy(copia, s, len);
+    }
+    return copia;
+}
+
+void yyerror(const char *mensagem) {
+    reportarErro(FASE_SINTATICA, lineno, mensagem, tokenString);
+}
+
+int adaptaToken(void) {
+    TokenType token = getToken();
+
+    switch (token) {
+        case INT:             return T_INT;
+        case VOID:            return T_VOID;
+        case ELSE:            return T_ELSE;
+        case IF:         yylval.num = lineno; return T_IF;
+        case WHILE:      yylval.num = lineno; return T_WHILE;
+        case RETURN:     yylval.num = lineno; return T_RETURN;
+        case ATRIBUICAO: yylval.num = lineno; return T_ATRIBUICAO;
+        
+        case IDENTIFICADOR:
+            yylval.id.texto = copiarLexema(tokenString);
+            yylval.id.linha = lineno;
+            return T_IDENTIFICADOR;
+
+        case NUMERO:
+            yylval.num = atoi(tokenString);
+            return T_NUMERO;
+
+        case IGUAL:           return T_IGUAL;
+        case MENOR:           return T_MENOR;
+        case MENOR_IGUAL:     return T_MENOR_IGUAL;
+        case MAIOR:           return T_MAIOR;
+        case MAIOR_IGUAL:     return T_MAIOR_IGUAL;
+        case DIFERENTE:       return T_DIFERENTE;
+        case MAIS:            return T_MAIS;
+        case MENOS:           return T_MENOS;
+        case VEZES:           return T_VEZES;
+        case DIVISAO:         return T_DIVISAO;
+        case PONTO_VIRGULA:   return T_PONTO_VIRGULA;
+        case VIRGULA:         return T_VIRGULA;
+        case ABRE_PARENTESE:  return T_ABRE_PARENTESE;
+        case FECHA_PARENTESE: return T_FECHA_PARENTESE;
+        case ABRE_COLCHETE:   return T_ABRE_COLCHETE;
+        case FECHA_COLCHETE:  return T_FECHA_COLCHETE;
+        case ABRE_CHAVE:      return T_ABRE_CHAVE;
+        case FECHA_CHAVE:     return T_FECHA_CHAVE;
+        case ENDFILE:         return 0;
+
+        case ERROR:
+        default:
+            reportarErro(FASE_LEXICA, lineno, "Token ou caractere invalido", tokenString);
+            return T_ERROR;
+    }
+}
+
+int yylex(void) {
+    return adaptaToken();
+}
+
+==> ast.c <==
+#include "ast.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static NoAST* alocarNo(TipoNoAST kind, int linha) {
+    NoAST *no = (NoAST*) calloc(1, sizeof(NoAST));
+    if (!no) {
+        fprintf(stderr, "Erro fatal: sem memoria para AST.\n");
+        exit(1);
+    }
+    no->kind = kind;
+    no->linha = linha;
+    no->tipo = TipoVoid;
+    return no;
+}
+
+NoAST* anexarIrmao(NoAST *lista, NoAST *novo) {
+    if (lista == NULL) return novo;
+    NoAST *atual = lista;
+    while (atual->irmao != NULL) atual = atual->irmao;
+    atual->irmao = novo;
+    return lista;
+}
+
+NoAST* criarNoDeclVar(TipoDado tipo, const char *nome, int tamanhoArray, bool ehArray, int linha) {
+    NoAST *no = alocarNo(NO_DECL_VAR, linha);
+    no->tipoDecl = tipo;
+    no->ehArray = ehArray;
+    no->valor = tamanhoArray;
+    strncpy(no->nome, nome, 63);
+    return no;
+}
+
+NoAST* criarNoDeclFunc(TipoDado tipoRetorno, const char *nome, NoAST *params, NoAST *corpo, int linha) {
+    NoAST *no = alocarNo(NO_DECL_FUNC, linha);
+    no->tipoDecl = tipoRetorno;
+    strncpy(no->nome, nome, 63);
+    no->filho[0] = params;
+    no->filho[1] = corpo;
+    return no;
+}
+
+NoAST* criarNoParam(TipoDado tipo, const char *nome, bool ehArray, int linha) {
+    NoAST *no = alocarNo(NO_PARAM, linha);
+    no->tipoDecl = tipo;
+    no->ehArray = ehArray;
+    strncpy(no->nome, nome, 63);
+    return no;
+}
+
+NoAST* criarNoComposto(NoAST *declsLocais, NoAST *comandos, int linha) {
+    NoAST *no = alocarNo(NO_COMPOSTO, linha);
+    no->filho[0] = declsLocais;
+    no->filho[1] = comandos;
+    return no;
+}
+
+NoAST* criarNoIf(NoAST *cond, NoAST *ramoThen, NoAST *ramoElse, int linha) {
+    NoAST *no = alocarNo(NO_IF, linha);
+    no->filho[0] = cond;
+    no->filho[1] = ramoThen;
+    no->filho[2] = ramoElse;
+    return no;
+}
+
+NoAST* criarNoWhile(NoAST *cond, NoAST *corpo, int linha) {
+    NoAST *no = alocarNo(NO_WHILE, linha);
+    no->filho[0] = cond;
+    no->filho[1] = corpo;
+    return no;
+}
+
+NoAST* criarNoReturn(NoAST *expr, int linha) {
+    NoAST *no = alocarNo(NO_RETURN, linha);
+    no->filho[0] = expr;
+    return no;
+}
+
+NoAST* criarNoAtribuicao(NoAST *destino, NoAST *origem, int linha) {
+    NoAST *no = alocarNo(NO_ATRIBUICAO, linha);
+    no->filho[0] = destino;
+    no->filho[1] = origem;
+    return no;
+}
+
+NoAST* criarNoOpBinario(OperadorBinario op, NoAST *esq, NoAST *dir, int linha) {
+    NoAST *no = alocarNo(NO_OP_BINARIO, linha);
+    no->op = op;
+    no->filho[0] = esq;
+    no->filho[1] = dir;
+    return no;
+}
+
+NoAST* criarNoVar(const char *nome, NoAST *indice, int linha) {
+    NoAST *no = alocarNo(NO_VAR, linha);
+    strncpy(no->nome, nome, 63);
+    no->ehArray = (indice != NULL);
+    no->filho[0] = indice;
+    return no;
+}
+
+NoAST* criarNoLiteral(int valor, int linha) {
+    NoAST *no = alocarNo(NO_LITERAL, linha);
+    no->valor = valor;
+    no->tipo = TipoInt;
+    return no;
+}
+
+NoAST* criarNoChamada(const char *nomeFunc, NoAST *args, int linha) {
+    NoAST *no = alocarNo(NO_CHAMADA, linha);
+    strncpy(no->nome, nomeFunc, 63);
+    no->filho[0] = args;
+    return no;
+}
+
+const char* nomeOperador(OperadorBinario op) {
+    switch (op) {
+        case OP_MAIS:        return "+";
+        case OP_MENOS:       return "-";
+        case OP_VEZES:       return "*";
+        case OP_DIVISAO:     return "/";
+        case OP_MENOR:       return "<";
+        case OP_MENOR_IGUAL: return "<=";
+        case OP_MAIOR:       return ">";
+        case OP_MAIOR_IGUAL: return ">=";
+        case OP_IGUAL:       return "==";
+        case OP_DIFERENTE:   return "!=";
+        default:             return "?";
+    }
+}
+
+void imprimirASTDecorada(NoAST *raiz, int nivel) {
+    for (NoAST *atual = raiz; atual != NULL; atual = atual->irmao) {
+        for (int i = 0; i < nivel; i++) printf("  ");
+
+        switch (atual->kind) {
+            case NO_DECL_VAR:
+                printf("DeclVar(%s %s%s) [tipo=%s]\n",
+                       nomeTipo(atual->tipoDecl), atual->nome,
+                       atual->ehArray ? "[]" : "", nomeTipo(atual->tipo));
+                break;
+            case NO_DECL_FUNC:
+                printf("DeclFunc(%s %s) [tipo=%s]\n",
+                       nomeTipo(atual->tipoDecl), atual->nome, nomeTipo(atual->tipo));
+                break;
+            case NO_PARAM:
+                printf("Param(%s %s%s) [tipo=%s]\n",
+                       nomeTipo(atual->tipoDecl), atual->nome,
+                       atual->ehArray ? "[]" : "", nomeTipo(atual->tipo));
+                break;
+            case NO_COMPOSTO:   printf("BlocoComposto\n"); break;
+            case NO_IF:         printf("If\n"); break;
+            case NO_WHILE:      printf("While\n"); break;
+            case NO_RETURN:     printf("Return [tipo=%s]\n", nomeTipo(atual->tipo)); break;
+            case NO_ATRIBUICAO: printf("Atribuicao (=) [tipo=%s]\n", nomeTipo(atual->tipo)); break;
+            case NO_OP_BINARIO: printf("OpBinario(%s) [tipo=%s]\n", nomeOperador(atual->op), nomeTipo(atual->tipo)); break;
+            case NO_VAR:        printf("Var(%s%s) [tipo=%s]\n", atual->nome, atual->filho[0] ? "[...]" : "", nomeTipo(atual->tipo)); break;
+            case NO_LITERAL:    printf("Literal(%d) [tipo=%s]\n", atual->valor, nomeTipo(atual->tipo)); break;
+            case NO_CHAMADA:    printf("ChamadaFunc(%s) [tipo=%s]\n", atual->nome, nomeTipo(atual->tipo)); break;
+        }
+
+        for (int i = 0; i < MAX_FILHOS; i++) {
+            if (atual->filho[i] != NULL) {
+                imprimirASTDecorada(atual->filho[i], nivel + 1);
+            }
+        }
+    }
+}
+
+void liberarAST(NoAST *raiz) {
+    if (raiz == NULL) return;
+    for (int i = 0; i < MAX_FILHOS; i++) liberarAST(raiz->filho[i]);
+    liberarAST(raiz->irmao);
+    free(raiz);
+}
+
+==> ast.h <==
+#ifndef _AST_H_
+#define _AST_H_
+
+#include "tabela.h"
+#include <stdbool.h>
+
+#define MAX_FILHOS 3
+
+typedef enum {
+    NO_DECL_VAR,
+    NO_DECL_FUNC,
+    NO_PARAM,
+    NO_COMPOSTO,
+    NO_IF,
+    NO_WHILE,
+    NO_RETURN,
+    NO_ATRIBUICAO,
+    NO_OP_BINARIO,
+    NO_VAR,
+    NO_LITERAL,
+    NO_CHAMADA
+} TipoNoAST;
+
+typedef enum {
+    OP_MAIS,
+    OP_MENOS,
+    OP_VEZES,
+    OP_DIVISAO,
+    OP_MENOR,
+    OP_MENOR_IGUAL,
+    OP_MAIOR,
+    OP_MAIOR_IGUAL,
+    OP_IGUAL,
+    OP_DIFERENTE
+} OperadorBinario;
+
+typedef struct NoAST {
+    TipoNoAST kind;
+    int linha;
+
+    char nome[64];
+    TipoDado tipoDecl;
+    bool ehArray;
+    OperadorBinario op;
+    int valor;       /* Valor do literal ou tamanho declarado do vetor */
+
+    TipoDado tipo;   /* Atributo sintetizado na analise semantica */
+
+    struct NoAST *filho[MAX_FILHOS];
+    struct NoAST *irmao;
+} NoAST;
+
+NoAST* anexarIrmao(NoAST *lista, NoAST *novo);
+NoAST* criarNoDeclVar(TipoDado tipo, const char *nome, int tamanhoArray, bool ehArray, int linha);
+NoAST* criarNoDeclFunc(TipoDado tipoRetorno, const char *nome, NoAST *params, NoAST *corpo, int linha);
+NoAST* criarNoParam(TipoDado tipo, const char *nome, bool ehArray, int linha);
+NoAST* criarNoComposto(NoAST *declsLocais, NoAST *comandos, int linha);
+NoAST* criarNoIf(NoAST *cond, NoAST *ramoThen, NoAST *ramoElse, int linha);
+NoAST* criarNoWhile(NoAST *cond, NoAST *corpo, int linha);
+NoAST* criarNoReturn(NoAST *expr, int linha);
+NoAST* criarNoAtribuicao(NoAST *destino, NoAST *origem, int linha);
+NoAST* criarNoOpBinario(OperadorBinario op, NoAST *esq, NoAST *dir, int linha);
+NoAST* criarNoVar(const char *nome, NoAST *indice, int linha);
+NoAST* criarNoLiteral(int valor, int linha);
+NoAST* criarNoChamada(const char *nomeFunc, NoAST *args, int linha);
+
+const char* nomeOperador(OperadorBinario op);
+void imprimirASTDecorada(NoAST *raiz, int nivel);
+void liberarAST(NoAST *raiz);
+
+#endif
+
+==> erros.c <==
+/* erros.c */
+#include "erros.h"
+#include <stdio.h>
+
+static int totalErros = 0;
+
+void inicializarErros(void) {
+    totalErros = 0;
+}
+
+static const char* nomeFase(FaseCompilacao fase) {
+    switch (fase) {
+        case FASE_LEXICA:    return "LEXICO";
+        case FASE_SINTATICA: return "SINTATICO";
+        case FASE_SEMANTICA: return "SEMANTICO";
+        default:             return "COMPILADOR";
+    }
+}
+
+void reportarErro(FaseCompilacao fase, int linha, const char *mensagem, const char *detalhe) {
+    totalErros++;
+    fprintf(stderr, "\n[ERRO %s] Linha %d: %s\n", nomeFase(fase), linha, mensagem);
+    if (detalhe != NULL && detalhe[0] != '\0') {
+        fprintf(stderr, "   -> Detalhe: %s\n", detalhe);
+    }
+}
+
+int obterTotalErros(void) {
+    return totalErros;
+}
+
+void imprimirResumoErros(void) {
+    printf("\n============================================================\n");
+    printf(" RELATORIO DE COMPILACAO | Total de Erros: %d\n", totalErros);
+    printf(" Status: %s\n", totalErros == 0 ? "SUCESSO" : "FALHA NA COMPILACAO");
+    printf("============================================================\n");
+}
+
+==> erros.h <==
+/* erros.h */
+#ifndef _ERROS_H_
+#define _ERROS_H_
+
+typedef enum {
+    FASE_LEXICA,
+    FASE_SINTATICA,
+    FASE_SEMANTICA
+} FaseCompilacao;
+
+void inicializarErros(void);
+void reportarErro(FaseCompilacao fase, int linha, const char *mensagem, const char *detalhe);
+int obterTotalErros(void);
+void imprimirResumoErros(void);
+
+#endif
+
+==> main.c <==
+#include "scan.h"
+#include "ast.h"
+#include "tabela.h"
+#include "semantica.h"
+#include "erros.h"
+#include "mips.h"
+
+FILE *Fonte;
+FILE *listing;
+
+extern NoAST *raizAST;
+int yyparse(void);
+
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        printf("Uso: %s <arquivo.cm> [saida_mips.txt]\n", argv[0]);
+        return 1;
+    }
+
+    const char *arquivoSaida = (argc >= 3) ? argv[2] : "saida_mips.txt";
+
+    Fonte = fopen(argv[1], "r");
+    if (Fonte == NULL) {
+        perror("Erro ao abrir arquivo");
+        return 1;
+    }
+
+    inicializarErros();
+
+    int resultadoSintatico = yyparse();
+    fclose(Fonte);
+
+    if (resultadoSintatico != 0 || obterTotalErros() > 0) {
+        imprimirResumoErros();
+        liberarAST(raizAST);
+        return 1;
+    }
+
+    analisarSemantica(raizAST);
+
+    imprimirTabelaSimbolos();
+
+    printf("\n============================================================\n");
+    printf(" AST DECORADA\n");
+    printf("============================================================\n");
+    imprimirASTDecorada(raizAST, 0);
+
+    imprimirResumoErros();
+
+    if (obterTotalErros() > 0) {
+        liberarAST(raizAST);
+        return 1;
+    }
+
+    if (gerarCodigoMIPS(raizAST, arquivoSaida)) {
+        printf("\nCodigo MIPS gerado com sucesso em: %s\n", arquivoSaida);
+    }
+
+    liberarAST(raizAST);
+    return 0;
+}
+
+==> Makefile <==
+CC = gcc
+YACC = bison
+CFLAGS = -Wall -Wextra -g
+TARGET = compilador
+
+OBJS = main.o scan.o adapta.o yacc.tab.o erros.o tabela.o ast.o semantica.o mips.o
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(OBJS) -o $(TARGET)
+
+yacc.tab.c yacc.tab.h: yacc.y
+	$(YACC) -d yacc.y
+
+main.o: main.c scan.h ast.h tabela.h semantica.h erros.h mips.h
+	$(CC) $(CFLAGS) -c main.c -o main.o
+
+scan.o: scan.c scan.h
+	$(CC) $(CFLAGS) -c scan.c -o scan.o
+
+adapta.o: adapta.c scan.h yacc.tab.h erros.h
+	$(CC) $(CFLAGS) -c adapta.c -o adapta.o
+
+yacc.tab.o: yacc.tab.c yacc.tab.h ast.h tabela.h
+	$(CC) $(CFLAGS) -c yacc.tab.c -o yacc.tab.o
+
+erros.o: erros.c erros.h
+	$(CC) $(CFLAGS) -c erros.c -o erros.o
+
+tabela.o: tabela.c tabela.h
+	$(CC) $(CFLAGS) -c tabela.c -o tabela.o
+
+ast.o: ast.c ast.h tabela.h
+	$(CC) $(CFLAGS) -c ast.c -o ast.o
+
+semantica.o: semantica.c semantica.h ast.h tabela.h erros.h
+	$(CC) $(CFLAGS) -c semantica.c -o semantica.o
+
+mips.o: mips.c mips.h ast.h
+	$(CC) $(CFLAGS) -c mips.c -o mips.o
+
+run: $(TARGET)
+	./$(TARGET) teste.cm
+
+clean:
+	rm -f $(TARGET) $(OBJS) yacc.tab.c yacc.tab.h saida_mips.txt
+
+.PHONY: all run clean
+
+==> scan.c <==
+#include "scan.h"
+
+int lineno = 1;
+char tokenString[MAXTOKENLEN + 1];
+
+int pegaChar(void)
+{
+    int c = fgetc(Fonte);
+
+    if (c == '\n')
+        lineno++;
+
+    return c;
+}
+
+void devolveChar(int c)
+{
+    if (c == '\n')
+        lineno--;
+
+    if (c != EOF)
+        ungetc(c, Fonte);
+}
+
+TokenType reservado(char *s)
+{
+    if (!strcmp(s, "else"))   return ELSE;
+    if (!strcmp(s, "if"))     return IF;
+    if (!strcmp(s, "int"))    return INT;
+    if (!strcmp(s, "return")) return RETURN;
+    if (!strcmp(s, "void"))   return VOID;
+    if (!strcmp(s, "while"))  return WHILE;
+
+    return IDENTIFICADOR;
+}
+
+TokenType getToken(void)
+{
+    int idx;
+    int c;
+    int p;
+
+    while (1)
+    {
+        idx = 0;
+        c = pegaChar();
+
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
+            continue;
+
+        if (c == EOF)
+        {
+            tokenString[0] = '\0';
+            return ENDFILE;
+        }
+
+        if (c == '/')
+        {
+            p = pegaChar();
+
+            if (p == '*')
+            {
+                while (1)
+                {
+                    c = pegaChar();
+
+                    if (c == EOF)
+                    {
+                        tokenString[0] = '\0';
+                        return ENDFILE;
+                    }
+
+                    if (c == '*')
+                    {
+                        p = pegaChar();
+
+                        if (p == '/')
+                            break;
+
+                        devolveChar(p);
+                    }
+                }
+
+                continue;
+            }
+
+            devolveChar(p);
+
+            tokenString[0] = '/';
+            tokenString[1] = '\0';
+
+            return DIVISAO;
+        }
+
+        if (isdigit(c))
+        {
+            while (isdigit(c))
+            {
+                if (idx < MAXTOKENLEN)
+                    tokenString[idx++] = c;
+
+                c = pegaChar();
+            }
+
+            devolveChar(c);
+
+            tokenString[idx] = '\0';
+
+            return NUMERO;
+        }
+
+        if (isalpha(c))
+        {
+            while (isalpha(c))
+            {
+                if (idx < MAXTOKENLEN)
+                    tokenString[idx++] = c;
+
+                c = pegaChar();
+            }
+
+            devolveChar(c);
+
+            tokenString[idx] = '\0';
+
+            return reservado(tokenString);
+        }
+
+        tokenString[0] = c;
+        tokenString[1] = '\0';
+
+        switch (c)
+        {
+            case '=':
+                p = pegaChar();
+
+                if (p == '=')
+                {
+                    tokenString[1] = '=';
+                    tokenString[2] = '\0';
+                    return IGUAL;
+                }
+
+                devolveChar(p);
+                return ATRIBUICAO;
+
+            case '<':
+                p = pegaChar();
+
+                if (p == '=')
+                {
+                    tokenString[1] = '=';
+                    tokenString[2] = '\0';
+                    return MENOR_IGUAL;
+                }
+
+                devolveChar(p);
+                return MENOR;
+
+            case '>':
+                p = pegaChar();
+
+                if (p == '=')
+                {
+                    tokenString[1] = '=';
+                    tokenString[2] = '\0';
+                    return MAIOR_IGUAL;
+                }
+
+                devolveChar(p);
+                return MAIOR;
+
+            case '!':
+                p = pegaChar();
+
+                if (p == '=')
+                {
+                    tokenString[1] = '=';
+                    tokenString[2] = '\0';
+                    return DIFERENTE;
+                }
+
+                devolveChar(p);
+                return ERROR;
+
+            case '+':
+                return MAIS;
+
+            case '-':
+                return MENOS;
+
+            case '*':
+                return VEZES;
+
+            case ';':
+                return PONTO_VIRGULA;
+
+            case ',':
+                return VIRGULA;
+
+            case '(':
+                return ABRE_PARENTESE;
+
+            case ')':
+                return FECHA_PARENTESE;
+
+            case '[':
+                return ABRE_COLCHETE;
+
+            case ']':
+                return FECHA_COLCHETE;
+
+            case '{':
+                return ABRE_CHAVE;
+
+            case '}':
+                return FECHA_CHAVE;
+
+            default:
+                return ERROR;
+        }
+    }
+}
+==> scan.h <==
+#ifndef _SCAN_H_
+#define _SCAN_H_
+
+#define FALSE 0
+#define TRUE 1
+#define MAXTOKENLEN 40
+
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+
+extern int lineno;
+extern FILE* Fonte;
+extern char tokenString[MAXTOKENLEN + 1];
+
+typedef enum
+{
+    ENDFILE,
+    ERROR,
+
+    ELSE,
+    IF,
+    INT,
+    RETURN,
+    VOID,
+    WHILE,
+
+    IDENTIFICADOR,
+    NUMERO,
+
+    ATRIBUICAO,
+    IGUAL,
+    MENOR,
+    MENOR_IGUAL,
+    MAIOR,
+    MAIOR_IGUAL,
+    DIFERENTE,
+
+    MAIS,
+    MENOS,
+    VEZES,
+    DIVISAO,
+
+    PONTO_VIRGULA,
+    VIRGULA,
+    ABRE_PARENTESE,
+    FECHA_PARENTESE,
+    ABRE_COLCHETE,
+    FECHA_COLCHETE,
+    ABRE_CHAVE,
+    FECHA_CHAVE
+
+} TokenType;
+
+TokenType getToken(void);
+
+#endif
+==> tabela.c <==
+#include "tabela.h"
+#include <stdio.h>
+#include <string.h>
+
+static Simbolo tabela[MAX_SIMBOLOS];
+static int totalSimbolos = 0;
+
+static int pilhaEscopos[MAX_ESCOPOS];
+static char nomesEscopos[MAX_ESCOPOS][64];
+static int topoEscopo = -1;
+
+void inicializarTabelaSimbolos(void) {
+    totalSimbolos = 0;
+    topoEscopo = -1;
+    entrarEscopo("global");
+}
+
+void entrarEscopo(const char *nomeEscopo) {
+    if (topoEscopo + 1 >= MAX_ESCOPOS) return;
+    topoEscopo++;
+    pilhaEscopos[topoEscopo] = totalSimbolos;
+    strncpy(nomesEscopos[topoEscopo], nomeEscopo ? nomeEscopo : "bloco", 63);
+    nomesEscopos[topoEscopo][63] = '\0';
+}
+
+void sairEscopo(void) {
+    if (topoEscopo > 0) topoEscopo--;
+}
+
+Simbolo* buscarSimboloEscopoAtual(const char *nome) {
+    if (topoEscopo < 0) return NULL;
+    for (int i = totalSimbolos - 1; i >= pilhaEscopos[topoEscopo]; i--) {
+        if (tabela[i].nivelEscopo == topoEscopo && strcmp(tabela[i].nome, nome) == 0) {
+            return &tabela[i];
+        }
+    }
+    return NULL;
+}
+
+Simbolo* buscarSimbolo(const char *nome) {
+    for (int nivel = topoEscopo; nivel >= 0; nivel--) {
+        for (int i = totalSimbolos - 1; i >= pilhaEscopos[nivel]; i--) {
+            if (tabela[i].nivelEscopo == nivel && strcmp(tabela[i].nome, nome) == 0) {
+                return &tabela[i];
+            }
+        }
+    }
+    return NULL;
+}
+
+bool inserirSimbolo(const char *nome, TipoDado tipo, CategoriaSimbolo categoria, int tamanhoArray, int linha) {
+    if (totalSimbolos >= MAX_SIMBOLOS || buscarSimboloEscopoAtual(nome) != NULL) {
+        return false;
+    }
+
+    Simbolo *s = &tabela[totalSimbolos++];
+    strncpy(s->nome, nome, 63);
+    s->nome[63] = '\0';
+    s->tipo = (categoria == CAT_FUNCAO) ? TipoFuncao : tipo;
+    s->tamanhoArray = tamanhoArray;
+    s->tipoRetorno = (categoria == CAT_FUNCAO) ? tipo : TipoVoid;
+    s->qtdParams = 0;
+    s->categoria = categoria;
+    s->linhaDeclaracao = linha;
+    s->nivelEscopo = topoEscopo;
+    strncpy(s->nomeEscopo, nomesEscopos[topoEscopo], 63);
+    s->nomeEscopo[63] = '\0';
+    return true;
+}
+
+void registrarParametroFuncao(Simbolo *funcSimb, TipoDado tipoParam) {
+    if (funcSimb != NULL && funcSimb->qtdParams < MAX_PARAMS) {
+        funcSimb->tiposParams[funcSimb->qtdParams++] = tipoParam;
+    }
+}
+
+const char* nomeTipo(TipoDado tipo) {
+    switch (tipo) {
+        case TipoInt:    return "TipoInt";
+        case TipoBool:   return "TipoBool";
+        case TipoVoid:   return "TipoVoid";
+        case TipoArray:  return "TipoArray(int)";
+        case TipoFuncao: return "TipoFuncao";
+        case TipoErro:   return "TipoErro";
+        default:         return "Desconhecido";
+    }
+}
+
+void imprimirTabelaSimbolos(void) {
+    printf("\n================================================================================\n");
+    printf(" TABELA DE SIMBOLOS\n");
+    printf("================================================================================\n");
+    printf(" %-15s | %-10s | %-15s | %-12s | %-5s | %s\n",
+           "Identificador", "Categoria", "Tipo", "Escopo", "Linha", "Detalhes");
+    printf("--------------------------------------------------------------------------------\n");
+
+    for (int i = 0; i < totalSimbolos; i++) {
+        Simbolo *s = &tabela[i];
+        const char *cat = (s->categoria == CAT_FUNCAO) ? "Funcao" :
+                          (s->categoria == CAT_PARAMETRO) ? "Parametro" : "Variavel";
+        char extra[64] = "-";
+
+        if (s->tipo == TipoArray) {
+            snprintf(extra, sizeof(extra), "tam=%d", s->tamanhoArray);
+        } else if (s->categoria == CAT_FUNCAO) {
+            snprintf(extra, sizeof(extra), "ret=%s, params=%d", nomeTipo(s->tipoRetorno), s->qtdParams);
+        }
+
+        printf(" %-15s | %-10s | %-15s | %-12s | %-5d | %s\n",
+               s->nome, cat, nomeTipo(s->tipo), s->nomeEscopo, s->linhaDeclaracao, extra);
+    }
+    printf("================================================================================\n");
+}
+
+==> tabela.h <==
+#ifndef _TABELA_H_
+#define _TABELA_H_
+
+#include <stdbool.h>
+
+#define MAX_SIMBOLOS 256
+#define MAX_ESCOPOS  64
+#define MAX_PARAMS   16
+
+typedef enum {
+    TipoInt,
+    TipoBool,
+    TipoVoid,
+    TipoArray,
+    TipoFuncao,
+    TipoErro
+} TipoDado;
+
+typedef enum {
+    CAT_VARIAVEL,
+    CAT_PARAMETRO,
+    CAT_FUNCAO
+} CategoriaSimbolo;
+
+typedef struct {
+    char nome[64];
+    TipoDado tipo;
+    int tamanhoArray;
+    TipoDado tipoRetorno;
+    int qtdParams;
+    TipoDado tiposParams[MAX_PARAMS];
+    CategoriaSimbolo categoria;
+    int linhaDeclaracao;
+    int nivelEscopo;
+    char nomeEscopo[64];
+} Simbolo;
+
+void inicializarTabelaSimbolos(void);
+void entrarEscopo(const char *nomeEscopo);
+void sairEscopo(void);
+
+bool inserirSimbolo(const char *nome, TipoDado tipo, CategoriaSimbolo categoria, int tamanhoArray, int linha);
+Simbolo* buscarSimbolo(const char *nome);
+Simbolo* buscarSimboloEscopoAtual(const char *nome);
+void registrarParametroFuncao(Simbolo *funcSimb, TipoDado tipoParam);
+const char* nomeTipo(TipoDado tipo);
+void imprimirTabelaSimbolos(void);
+
+#endif
+
+==> yacc.y <==
+%code requires {
+    #include "ast.h"
+}
+
+%{
+#include <stdio.h>
+#include <stdlib.h>
+#include "ast.h"
+
+extern int lineno;
+NoAST *raizAST = NULL;
+
+int yylex(void);
+void yyerror(const char *mensagem);
+%}
+
+%union {
+    int num;
+    struct {
+        char *texto;
+        int linha;
+    } id;
+    TipoDado tipo;
+    OperadorBinario op;
+    NoAST *no;
+}
+
+%token T_INT T_VOID T_ELSE
+%token <num> T_IF T_WHILE T_RETURN T_ATRIBUICAO T_NUMERO
+%token <id> T_IDENTIFICADOR
+
+%token T_IGUAL
+%token T_MENOR T_MENOR_IGUAL T_MAIOR T_MAIOR_IGUAL T_DIFERENTE
+
+%token T_MAIS T_MENOS T_VEZES T_DIVISAO
+
+%token T_PONTO_VIRGULA T_VIRGULA
+
+%token T_ABRE_PARENTESE T_FECHA_PARENTESE
+%token T_ABRE_COLCHETE T_FECHA_COLCHETE
+%token T_ABRE_CHAVE T_FECHA_CHAVE
+
+%token T_ERROR
+
+%type <no> programa lista_declaracoes declaracao declaracao_variavel
+%type <no> declaracao_funcao parametros lista_parametros parametro
+%type <no> comando_composto declaracoes_locais lista_comandos comando
+%type <no> comando_expressao comando_selecao comando_repeticao comando_retorno
+%type <no> expressao variavel expressao_simples expressao_aditiva
+%type <no> expressao_multiplicativa fator chamada_funcao argumentos lista_argumentos
+%type <tipo> tipo_especificador
+%type <op> operador_relacional
+
+%start programa
+
+%precedence T_IF_SEM_ELSE
+%precedence T_ELSE
+
+%%
+
+programa:
+    lista_declaracoes
+    {
+        raizAST = $1;
+        $$ = $1;
+    }
+;
+
+lista_declaracoes:
+      lista_declaracoes declaracao
+      {
+          $$ = anexarIrmao($1, $2);
+      }
+    | declaracao
+      {
+          $$ = $1;
+      }
+;
+
+declaracao:
+      declaracao_variavel { $$ = $1; }
+    | declaracao_funcao   { $$ = $1; }
+;
+
+declaracao_variavel:
+      tipo_especificador T_IDENTIFICADOR T_PONTO_VIRGULA
+      {
+          $$ = criarNoDeclVar($1, $2.texto, 0, false, $2.linha);
+          free($2.texto);
+      }
+    | tipo_especificador T_IDENTIFICADOR T_ABRE_COLCHETE T_NUMERO T_FECHA_COLCHETE T_PONTO_VIRGULA
+      {
+          $$ = criarNoDeclVar($1, $2.texto, $4, true, $2.linha);
+          free($2.texto);
+      }
+;
+
+tipo_especificador:
+      T_INT  { $$ = TipoInt; }
+    | T_VOID { $$ = TipoVoid; }
+;
+
+declaracao_funcao:
+    tipo_especificador T_IDENTIFICADOR
+    T_ABRE_PARENTESE parametros T_FECHA_PARENTESE
+    comando_composto
+    {
+        $$ = criarNoDeclFunc($1, $2.texto, $4, $6, $2.linha);
+        free($2.texto);
+    }
+;
+
+parametros:
+      lista_parametros { $$ = $1; }
+    | T_VOID           { $$ = NULL; }
+    | %empty           { $$ = NULL; }
+;
+
+lista_parametros:
+      lista_parametros T_VIRGULA parametro
+      {
+          $$ = anexarIrmao($1, $3);
+      }
+    | parametro
+      {
+          $$ = $1;
+      }
+;
+
+parametro:
+      tipo_especificador T_IDENTIFICADOR
+      {
+          $$ = criarNoParam($1, $2.texto, false, $2.linha);
+          free($2.texto);
+      }
+    | tipo_especificador T_IDENTIFICADOR T_ABRE_COLCHETE T_FECHA_COLCHETE
+      {
+          $$ = criarNoParam($1, $2.texto, true, $2.linha);
+          free($2.texto);
+      }
+;
+
+comando_composto:
+    T_ABRE_CHAVE declaracoes_locais lista_comandos T_FECHA_CHAVE
+    {
+        $$ = criarNoComposto($2, $3, lineno);
+    }
+;
+
+declaracoes_locais:
+      declaracoes_locais declaracao_variavel
+      {
+          $$ = anexarIrmao($1, $2);
+      }
+    | %empty
+      {
+          $$ = NULL;
+      }
+;
+
+lista_comandos:
+      lista_comandos comando
+      {
+          $$ = anexarIrmao($1, $2);
+      }
+    | %empty
+      {
+          $$ = NULL;
+      }
+;
+
+comando:
+      comando_expressao { $$ = $1; }
+    | comando_composto  { $$ = $1; }
+    | comando_selecao   { $$ = $1; }
+    | comando_repeticao { $$ = $1; }
+    | comando_retorno   { $$ = $1; }
+;
+
+comando_expressao:
+      expressao T_PONTO_VIRGULA { $$ = $1; }
+    | T_PONTO_VIRGULA           { $$ = NULL; }
+;
+
+comando_selecao:
+      T_IF T_ABRE_PARENTESE expressao T_FECHA_PARENTESE comando %prec T_IF_SEM_ELSE
+      {
+          $$ = criarNoIf($3, $5, NULL, $1);
+      }
+    | T_IF T_ABRE_PARENTESE expressao T_FECHA_PARENTESE comando T_ELSE comando
+      {
+          $$ = criarNoIf($3, $5, $7, $1);
+      }
+;
+
+comando_repeticao:
+    T_WHILE T_ABRE_PARENTESE expressao T_FECHA_PARENTESE comando
+    {
+        $$ = criarNoWhile($3, $5, $1);
+    }
+;
+
+comando_retorno:
+      T_RETURN T_PONTO_VIRGULA
+      {
+          $$ = criarNoReturn(NULL, $1);
+      }
+    | T_RETURN expressao T_PONTO_VIRGULA
+      {
+          $$ = criarNoReturn($2, $1);
+      }
+;
+
+expressao:
+      variavel T_ATRIBUICAO expressao
+      {
+          $$ = criarNoAtribuicao($1, $3, $2);
+      }
+    | expressao_simples
+      {
+          $$ = $1;
+      }
+;
+
+variavel:
+      T_IDENTIFICADOR
+      {
+          $$ = criarNoVar($1.texto, NULL, $1.linha);
+          free($1.texto);
+      }
+    | T_IDENTIFICADOR T_ABRE_COLCHETE expressao T_FECHA_COLCHETE
+      {
+          $$ = criarNoVar($1.texto, $3, $1.linha);
+          free($1.texto);
+      }
+;
+
+expressao_simples:
+      expressao_aditiva operador_relacional expressao_aditiva
+      {
+          $$ = criarNoOpBinario($2, $1, $3, lineno);
+      }
+    | expressao_aditiva
+      {
+          $$ = $1;
+      }
+;
+
+operador_relacional:
+      T_MENOR       { $$ = OP_MENOR; }
+    | T_MENOR_IGUAL { $$ = OP_MENOR_IGUAL; }
+    | T_MAIOR       { $$ = OP_MAIOR; }
+    | T_MAIOR_IGUAL { $$ = OP_MAIOR_IGUAL; }
+    | T_IGUAL       { $$ = OP_IGUAL; }
+    | T_DIFERENTE   { $$ = OP_DIFERENTE; }
+;
+
+expressao_aditiva:
+      expressao_aditiva T_MAIS expressao_multiplicativa
+      {
+          $$ = criarNoOpBinario(OP_MAIS, $1, $3, lineno);
+      }
+    | expressao_aditiva T_MENOS expressao_multiplicativa
+      {
+          $$ = criarNoOpBinario(OP_MENOS, $1, $3, lineno);
+      }
+    | expressao_multiplicativa
+      {
+          $$ = $1;
+      }
+;
+
+expressao_multiplicativa:
+      expressao_multiplicativa T_VEZES fator
+      {
+          $$ = criarNoOpBinario(OP_VEZES, $1, $3, lineno);
+      }
+    | expressao_multiplicativa T_DIVISAO fator
+      {
+          $$ = criarNoOpBinario(OP_DIVISAO, $1, $3, lineno);
+      }
+    | fator
+      {
+          $$ = $1;
+      }
+;
+
+fator:
+      T_ABRE_PARENTESE expressao T_FECHA_PARENTESE { $$ = $2; }
+    | variavel                                     { $$ = $1; }
+    | chamada_funcao                               { $$ = $1; }
+    | T_NUMERO                                     { $$ = criarNoLiteral($1, lineno); }
+;
+
+chamada_funcao:
+    T_IDENTIFICADOR T_ABRE_PARENTESE argumentos T_FECHA_PARENTESE
+    {
+        $$ = criarNoChamada($1.texto, $3, $1.linha);
+        free($1.texto);
+    }
+;
+
+argumentos:
+      lista_argumentos { $$ = $1; }
+    | %empty           { $$ = NULL; }
+;
+
+lista_argumentos:
+      lista_argumentos T_VIRGULA expressao
+      {
+          $$ = anexarIrmao($1, $3);
+      }
+    | expressao
+      {
+          $$ = $1;
+      }
+;
+
+%%
